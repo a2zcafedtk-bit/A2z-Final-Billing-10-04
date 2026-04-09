@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A2Z CYBER — Billing & Management System</title>
+  <meta name="description" content="A2Z CYBER Cafe — Professional billing, timer, and job management system for staff." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════ SPLASH / LOGIN ═══════════════════════════ -->
+  <div id="screen-login" class="screen active">
+    <div class="login-bg">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+      <div class="orb orb-4"></div>
+    </div>
+    <div class="login-card glass">
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <h1>A2Z CYBER</h1>
+        <p class="brand-sub">Billing & Management System</p>
+      </div>
+
+      <!-- Staff Selection View -->
+      <div id="login-selection-view">
+        <p style="color:var(--text-secondary);font-size:0.95rem;margin-bottom:1.25rem;text-align:center;">Who is working today?</p>
+        <div id="staff-btn-grid" class="staff-btn-grid"></div>
+        <p class="login-hint" style="margin-top:1.5rem;">Tap your name to continue</p>
+      </div>
+
+      <!-- Password Entry View (Hidden by default) -->
+      <div id="login-password-view" class="hidden">
+        <button onclick="showStaffSelection()" class="btn btn-ghost btn-sm" style="margin-bottom:1rem; padding: 0.3rem 0.6rem;">← Back</button>
+        <div style="text-align:center; margin-bottom:1.5rem;">
+          <p style="color:var(--text-secondary); font-size:0.9rem;">Logging in as</p>
+          <h2 id="login-staff-name" style="font-size:1.5rem; color:var(--cyan); margin-top:0.2rem;">Staff Name</h2>
+        </div>
+        <div class="form-group">
+          <label for="login-password-input">Enter Password</label>
+          <input type="password" id="login-password-input" class="input-field" placeholder="••••" autocomplete="current-password" onkeyup="if(event.key==='Enter') handleLogin()" />
+        </div>
+        <button onclick="handleLogin()" class="btn btn-primary btn-full" style="margin-top:1.5rem;">
+          Unlock Dashboard
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════ DASHBOARD ════════════════════════════════ -->
+  <div id="screen-dashboard" class="screen">
+    <header class="top-bar">
+      <div class="top-bar-brand">⚡ A2Z CYBER</div>
+      <div class="top-bar-center" id="live-clock"></div>
+      <div class="top-bar-right">
+        <span class="staff-badge" id="header-staff-name">Staff</span>
+        <button id="btn-logout" class="btn btn-ghost btn-sm">Logout</button>
+      </div>
+    </header>
+
+    <main class="dashboard-main">
+      <!-- Dashboard Hero / Clock Section -->
+      <section class="dashboard-hero">
+        <div class="hero-flex-box">
+          <div class="hero-clock-box">
+            <div id="hero-clock-time" class="hero-clock-time">00:00:00 AM</div>
+            <div id="hero-clock-date" class="hero-clock-date">Searching...</div>
+          </div>
+          <div class="hero-stats-box glass">
+            <div class="hero-mini-stat">
+              <span class="mini-stat-label">Total Day Income</span>
+              <span class="mini-stat-value" id="dashboard-total-income">₹0</span>
+            </div>
+            <div class="hero-mini-stat">
+              <span class="mini-stat-label">Active Staff</span>
+              <span class="mini-stat-value" id="dashboard-staff-count">0</span>
+            </div>
+            <div class="hero-mini-stat" style="border-left: 1px solid var(--border); padding-left: 1rem; border-right: none;">
+              <span class="mini-stat-label">Sheets Status</span>
+              <span id="sheets-status-val" class="mini-stat-value" style="font-size: 0.85rem; color: var(--red);">NOT LINKED</span>
+            </div>
+          </div>
+        </div>
+        <div class="motivation-quote-box glass">
+          <span>💡</span>
+          <div id="dashboard-motivation" class="typewriter-text">Every customer who walks in is an opportunity.</div>
+        </div>
+      </section>
+
+
+
+      <!-- Stats Row -->
+      <section class="stats-row" id="stats-row">
+        <div class="stat-card glass">
+          <div class="stat-icon">👥</div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-customers">0</div>
+            <div class="stat-label">Today's Customers</div>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <div class="stat-icon">💰</div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-income">₹0</div>
+            <div class="stat-label">Today's Income</div>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <div class="stat-icon">🖨️</div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-printjobs">0</div>
+            <div class="stat-label">Print / Xerox Jobs</div>
+          </div>
+        </div>
+        <div class="stat-card glass" id="stat-commission-card" style="display:none;">
+          <div class="stat-icon">✨</div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-commission">₹0</div>
+            <div class="stat-label">Today's Commission</div>
+          </div>
+        </div>
+        <div class="stat-card glass" id="stat-alltime-commission-card" style="display:none;">
+          <div class="stat-icon">🏆</div>
+          <div class="stat-info">
+            <div class="stat-value" id="stat-alltime-commission">₹0</div>
+            <div class="stat-label">All-Time Commission</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Action Buttons -->
+      <section class="action-grid">
+        <button id="btn-rush-billing" class="action-card glass action-card--timer">
+          <div class="action-icon">🚀</div>
+          <div class="action-title">Quick Bill / Fast Entry</div>
+          <div class="action-desc">Fast Xerox & Print</div>
+          <div class="action-rate">Quick Add</div>
+        </button>
+        <button id="btn-new-service-job" class="action-card glass action-card--service">
+          <div class="action-icon">🖨️</div>
+          <div class="action-title">Generate Bill</div>
+          <div class="action-desc">Print · Xerox · Form · More</div>
+          <div class="action-rate">Services & Pricing</div>
+        </button>
+        <button id="btn-reports" class="action-card glass action-card--reports">
+          <div class="action-icon">📊</div>
+          <div class="action-title">Daily Reports</div>
+          <div class="action-desc">Income · Customers · Staff Summary</div>
+          <div class="action-rate">View All Records</div>
+        </button>
+        <button id="btn-wallet" class="action-card glass action-card--service">
+          <div class="action-icon">💳</div>
+          <div class="action-title">My Wallet</div>
+          <div class="action-desc">Check Commission & Withdraw</div>
+          <div class="action-rate">Withdraw</div>
+        </button>
+        <button id="btn-settings" class="action-card glass action-card--settings">
+          <div class="action-icon">⚙️</div>
+          <div class="action-title">Settings</div>
+          <div class="action-desc">Staff · Rates · Webhook</div>
+          <div class="action-rate">System Config</div>
+        </button>
+        <button id="btn-manage-services" class="action-card glass action-card--service">
+          <div class="action-icon">📄</div>
+          <div class="action-title">Manage Services</div>
+          <div class="action-desc">Add · Edit · Delete Services</div>
+          <div class="action-rate">Catalogue</div>
+        </button>
+        <button id="btn-profile" class="action-card glass action-card--reports">
+          <div class="action-icon">👤</div>
+          <div class="action-title">My Profile</div>
+          <div class="action-desc">Upload Photo · Personal Details</div>
+          <div class="action-rate">Manage Account</div>
+        </button>
+        <button id="btn-customer-db" class="action-card glass action-card--management manager-only-ui">
+          <div class="action-icon">📂</div>
+          <div class="action-title">Customer DB</div>
+          <div class="action-desc">All-Time Client Records</div>
+          <div class="action-rate">CRM View</div>
+        </button>
+      </section>
+
+
+      <!-- Daily Summary & Staff Performance (Below Cards) -->
+      <section id="manager-dashboard-extra" class="hidden manager-extra-grid">
+        <!-- Daily Summary -->
+        <div class="report-section glass" style="padding: 1.5rem;">
+          <h3>📊 Daily Summary</h3>
+          <div style="display: flex; gap: 1rem; margin-top: 1rem;">
+            <div class="summary-box-mini" style="flex:1; border:1px solid #eef2f6; padding:0.75rem; text-align:center; border-radius:14px;">
+              <div style="font-size:0.75rem; color:var(--text-muted);">Total Cash</div>
+              <div id="summary-total-cash" style="font-size:1.25rem; font-weight:800; color:var(--green);">₹0</div>
+            </div>
+            <div class="summary-box-mini" style="flex:1; border:1px solid #eef2f6; padding:0.75rem; text-align:center; border-radius:14px;">
+              <div style="font-size:0.75rem; color:var(--text-muted);">Total UPI</div>
+              <div id="summary-total-upi" style="font-size:1.25rem; font-weight:800; color:var(--cyan);">₹0</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Staff Performance -->
+        <div class="report-section glass" style="padding: 1.5rem;">
+          <h3>📈 Staff Performance</h3>
+          <div id="staff-performance-list" style="margin-top: 1rem; display:flex; flex-direction:column; gap:0.5rem;">
+            <!-- Rendered in app.js -->
+            <div class="empty-state">No staff data yet.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Recent Transactions -->
+      <section class="recent-section glass">
+        <div class="section-header">
+          <h2>Recent Transactions</h2>
+          <button id="btn-clear-history" class="btn btn-ghost btn-sm">Clear</button>
+        </div>
+        <div class="table-wrapper">
+          <table id="recent-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Customer</th>
+                <th>Mobile</th>
+                <th>Staff</th>
+                <th>Service</th>
+                <th>Time / Qty</th>
+                <th>Amount</th>
+                <th>Payment</th>
+                <th>Date & Time</th>
+                <th>Sync</th>
+              </tr>
+            </thead>
+            <tbody id="recent-table-body">
+              <tr><td colspan="9" class="empty-state">No transactions yet today</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+
+  <!-- RUSH BILLING FORM -->
+  <div id="screen-rush-billing" class="screen">
+    <div class="rush-screen-bg">
+      <div class="rush-particle rush-p1"></div>
+      <div class="rush-particle rush-p2"></div>
+      <div class="rush-particle rush-p3"></div>
+      <div class="rush-particle rush-p4"></div>
+      <div class="rush-particle rush-p5"></div>
+    </div>
+    <div class="form-screen-container" style="max-width: 950px;">
+      <div class="form-screen-header">
+        <button id="btn-back-from-rush" class="btn btn-ghost">← Back</button>
+        <h2>⚡ RUSH MODE</h2>
+        <div class="rush-live-badge">🔴 LIVE</div>
+      </div>
+      <div class="rush-banner">
+        <span class="rush-banner-icon">🏃‍♂️</span>
+        <span>Quick tap billing — No name needed!</span>
+        <span class="rush-banner-icon">🏃‍♀️</span>
+      </div>
+      <div class="form-card glass rush-card">
+        <div class="form-body">
+          <div id="rush-grid" class="rush-grid">
+            <!-- Dynamic Rush Items injected here -->
+          </div>
+
+          <div class="rush-manual-entry glass">
+            <div class="form-group" style="flex: 2;">
+              <label for="rush-manual-svc">Custom Service Name</label>
+              <input type="text" id="rush-manual-svc" class="input-field" placeholder="e.g. Online Form">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label for="rush-manual-amt">Amount (₹)</label>
+              <input type="number" id="rush-manual-amt" class="input-field" placeholder="0" min="1">
+            </div>
+            <button onclick="addManualRushItem()" class="btn btn-primary" style="margin-top: 1.5rem; height: 44px;">+ Add</button>
+          </div>
+
+          <div class="form-group" style="margin-top: 1.5rem;">
+            <label>💳 Payment Mode</label>
+            <div class="payment-mode-selector">
+              <button class="pm-btn active" data-mode="cash">💵 Cash</button>
+              <button class="pm-btn" data-mode="upi">📱 UPI / QR</button>
+            </div>
+          </div>
+          
+          <div id="rush-cart-section" class="service-cart-section hidden">
+            <div class="service-btn-label" style="color:var(--amber); font-weight:800;">🛒 CART SUMMARY</div>
+            <div id="rush-cart-list" class="service-cart-list"></div>
+          </div>
+        </div>
+
+        <div class="form-footer">
+          <div class="billing-total-box glass">
+            <span style="font-size:0.9rem; font-weight:800; color:var(--text-muted);">TOTAL AMOUNT</span>
+            <span class="billing-total-amount" id="rush-total-display">₹0</span>
+          </div>
+          
+          <button id="btn-save-rush-job" class="btn btn-primary btn-full btn-large rush-save-btn">
+            🚀 INSTANT BILL & SAVE
+          </button>
+          <div id="rush-motivation-quote" class="motivation-quote-box">
+            <span class="typewriter-text">🔥 Speed is your superpower!</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SERVICE JOB FORM -->
+  <div id="screen-service-form" class="screen">
+    <div class="form-screen-container">
+      <div class="form-screen-header">
+        <button id="btn-back-from-service-form" class="btn btn-ghost">← Back</button>
+        <h2>🧾 Generate Bill</h2>
+        <div></div>
+      </div>
+      
+      <div class="service-form-split-layout">
+        <!-- Main Form Card -->
+        <div class="form-card glass">
+          <div class="form-header">
+            <div class="form-grid" style="margin-bottom: 0.5rem;">
+              <div class="form-group">
+                <label for="sf-customer-name">Customer Name <span class="required">*</span></label>
+                <input type="text" id="sf-customer-name" class="input-field" placeholder="Enter customer name" />
+              </div>
+              <div class="form-group">
+                <label for="sf-mobile">Mobile Number <span class="required">*</span></label>
+                <input type="tel" id="sf-mobile" class="input-field" placeholder="Mobile number" maxlength="10" />
+              </div>
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label for="sf-address">Address</label>
+                <input type="text" id="sf-address" class="input-field" placeholder="Customer address (optional)" />
+              </div>
+            </div>
+            <div class="service-search-container" style="position: relative; z-index: 100;">
+              <div class="form-group full-width">
+                <label for="sf-service-search">Search Service (e.g. Xerox, Print)</label>
+                <div class="search-input-wrapper">
+                  <input type="text" id="sf-service-search" class="input-field" placeholder="Type to search..." autocomplete="off" oninput="searchServices()" />
+                  <div id="sf-search-results" class="search-results-dropdown hidden"></div>
+                </div>
+              </div>
+              <!-- Manual Entry Area -->
+              <div class="sf-custom-entry" style="display:flex; gap:0.5rem; margin-top:0.75rem; padding:0.5rem; background:rgba(255,143,0,0.05); border:1.5px dashed var(--amber); border-radius:10px;">
+                <div class="form-group" style="flex:2; margin:0;">
+                  <input type="text" id="sf-custom-name" class="input-field" placeholder="Enter Custom Service..." aria-label="Custom Service Name" />
+                </div>
+                <div class="form-group" style="flex:1; margin:0;">
+                  <input type="number" id="sf-custom-price" class="input-field" placeholder="₹ Amount" aria-label="Custom Price" />
+                </div>
+                <button onclick="addManualServiceItem()" class="btn btn-primary" style="padding:0 1rem; height:42px; background:var(--amber); border-color:var(--amber);" title="Add Custom Item">+</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-body">
+            <div id="service-cart-section" class="service-cart-section hidden">
+              <div class="service-btn-label">Bill Items</div>
+              <div id="service-cart-list" class="service-cart-list"></div>
+            </div>
+          </div>
+
+          <div class="form-footer">
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem; margin-bottom: 0.25rem;">
+              <div class="form-group" style="margin:0">
+                <label for="sf-gov-fees" style="font-size:0.7rem;">🏛️ GOV FEES / EXTRA</label>
+                <input type="number" id="sf-gov-fees" class="input-field input-gov-fees" style="height:32px; font-size:0.85rem;" placeholder="0" min="0" oninput="renderServiceCart()" />
+              </div>
+              <div class="form-group" style="margin:0">
+                <label id="lbl-payment-mode" style="font-size:0.7rem;">💳 Payment Mode</label>
+                <div class="payment-mode-selector" aria-labelledby="lbl-payment-mode" style="height:32px; padding:2px;">
+                  <button class="pm-btn active" data-mode="cash" style="font-size:0.75rem; padding:0;">💵 Cash</button>
+                  <button class="pm-btn" data-mode="upi" style="font-size:0.75rem; padding:0;">📱 UPI</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="billing-total-box glass" style="margin-bottom:0.4rem; padding:0.4rem 1rem;">
+              <span style="font-size:0.75rem; font-weight:800; color:var(--text-muted);">TOTAL AMOUNT</span>
+              <span class="billing-total-amount" id="sf-total-display" style="font-size:1.3rem;">₹0</span>
+            </div>
+            
+            <button id="btn-save-service-job" class="btn btn-primary btn-full" style="padding:0.6rem; font-size:0.95rem;">
+              ✅ SAVE & PRINT RECEIPT
+            </button>
+          </div>
+        </div>
+
+        <!-- Sidebar Right: Quick Add -->
+        <aside class="quick-bill-sidebar glass">
+          <div class="sidebar-label">⚡ QUICK ADD</div>
+          <div class="sidebar-btn-grid" id="service-sidebar-grid">
+            <!-- Dynamic Rush Items injected here by renderQuickAddSidebar() -->
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════ BILLING RECEIPT MODAL ═════════════════════════════════ -->
+  <div id="modal-receipt" class="modal-overlay hidden">
+    <div class="modal-card" id="receipt-content" style="background: white !important; color: black !important; box-shadow: none !important; border: 1px solid #eee;">
+      <div class="receipt-header">
+        <div class="receipt-brand" style="color: black !important; font-size: 1.8rem;">A2z Cyber & Consultancy</div>
+        <div class="receipt-tagline" style="color: #333 !important; font-weight: 700; font-size: 0.9rem;">
+          Mob: 8013332233 / 9674363374<br>
+          Address: Duttapukur Bustand, 743248
+        </div>
+        <div class="receipt-divider" style="border-top: 2px dashed #000; margin: 1rem 0;"></div>
+      </div>
+      <div id="receipt-body" class="receipt-body"></div>
+      <div class="receipt-footer">
+        <p>Thank you for visiting A2Z CYBER!</p>
+        <p class="receipt-footer-sub">Please visit again 🙏</p>
+      </div>
+      <div class="receipt-actions">
+        <button id="btn-whatsapp-receipt" class="btn btn-whatsapp">📱 Send on WhatsApp</button>
+        <button id="btn-print-receipt" class="btn btn-primary">🖨️ Print Receipt</button>
+        <button id="btn-close-receipt" class="btn btn-ghost">✓ Done</button>
+      </div>
+    </div>
+  </div>
+  <!-- ═══════════════════ STAFF DETAILS MODAL ═════════════════════════════════ -->
+  <div id="modal-staff-detail" class="modal-overlay hidden">
+    <div class="modal-card glass" style="width: 700px; max-width: calc(100vw - 2rem); padding: 1.5rem;">
+      <div class="form-screen-header" style="margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem;">
+        <h2 id="staff-detail-name">Staff Name</h2>
+        <button id="btn-close-staff-detail" class="btn btn-ghost" style="padding: 0.5rem; width: 40px; height: 40px; border-radius: 50%;">✕</button>
+      </div>
+      
+      <div class="report-stats-row" style="margin-bottom: 1.5rem; gap: 1rem;">
+        <div class="stat-card glass" style="padding: 1rem 1.5rem;">
+          <div class="stat-info">
+            <div class="stat-value" id="sd-today" style="font-size: 1.5rem;">₹0</div>
+            <div class="stat-label">Today's Income</div>
+            <div class="stat-label" style="color:var(--cyan); font-size:0.8rem; margin-top:0.2rem">Comm: <span id="sd-today-comm" style="font-weight:700">₹0</span></div>
+          </div>
+        </div>
+        <div class="stat-card glass" style="padding: 1rem 1.5rem;">
+          <div class="stat-info">
+            <div class="stat-value" id="sd-week" style="font-size: 1.5rem;">₹0</div>
+            <div class="stat-label">Weekly Income</div>
+            <div class="stat-label" style="color:var(--cyan); font-size:0.8rem; margin-top:0.2rem">Comm: <span id="sd-week-comm" style="font-weight:700">₹0</span></div>
+          </div>
+        </div>
+        <div class="stat-card glass" style="padding: 1rem 1.5rem;">
+          <div class="stat-info">
+            <div class="stat-value" id="sd-month" style="font-size: 1.5rem;">₹0</div>
+            <div class="stat-label">Monthly Income</div>
+            <div class="stat-label" style="color:var(--cyan); font-size:0.8rem; margin-top:0.2rem">Comm: <span id="sd-month-comm" style="font-weight:700">₹0</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass report-section" style="padding: 1rem 1.5rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; background: linear-gradient(135deg, rgba(0, 160, 220, 0.05), rgba(109, 74, 255, 0.05)); border: 1px solid rgba(0, 160, 220, 0.2);">
+        <h3 style="margin-bottom: 0.75rem; font-size: 1.05rem; color: var(--text-primary);">Lifetime Wallet Overview</h3>
+        <div style="display: flex; gap: 1rem;">
+          <div style="flex: 1;">
+            <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">Total Earned</div>
+            <div id="sd-lifetime-earned" style="font-size: 1.2rem; font-family: var(--font-mono); font-weight: 800;">₹0.00</div>
+          </div>
+          <div style="flex: 1;">
+            <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">Total Withdrawn</div>
+            <div id="sd-lifetime-withdrawn" style="font-size: 1.2rem; font-family: var(--font-mono); font-weight: 800; color: var(--red);">₹0.00</div>
+          </div>
+          <div style="flex: 1;">
+            <div style="font-size: 0.85rem; color: var(--teal); font-weight: 800;">Available Balance</div>
+            <div id="sd-lifetime-balance" style="font-size: 1.5rem; font-family: var(--font-mono); font-weight: 800; color: var(--teal);">₹0.00</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass report-section" style="padding: 1rem 1.5rem; border-radius: var(--radius-md);">
+        <h3 style="margin-bottom: 1rem; font-size: 1.05rem; color: var(--text-primary);">Transactions History</h3>
+        <div class="table-wrapper" style="max-height: 300px; overflow-y: auto;">
+          <table id="staff-detail-table">
+            <thead>
+              <tr>
+                <th>Date & Time</th>
+                <th>Customer</th>
+                <th>Service (Items)</th>
+                <th>Amount</th>
+              </tr>
+            </thead>
+            <tbody id="staff-detail-tbody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ STAFF WALLET MODAL ═════════════════════════════════ -->
+  <div id="modal-wallet" class="modal-overlay hidden">
+    <div class="modal-card glass" style="width: 500px; max-width: calc(100vw - 2rem); padding: 1.5rem;">
+      <div class="form-screen-header" style="margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem;">
+        <h2 id="wallet-staff-name">My Wallet</h2>
+        <button id="btn-close-wallet" class="btn btn-ghost" style="padding: 0.5rem; width: 40px; height: 40px; border-radius: 50%;">✕</button>
+      </div>
+      
+      <div class="report-stats-row" style="margin-bottom: 1.5rem; gap: 1rem; grid-template-columns: 1fr;">
+        <div class="stat-card glass" style="padding: 1.5rem; display: flex; justify-content: space-between; align-items: center; border-color: var(--teal);">
+          <div class="stat-info">
+            <div class="stat-label" style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.4rem;">Available Balance</div>
+            <div class="stat-value" id="wallet-balance" style="font-size: 2.2rem; color: var(--teal);">₹0.00</div>
+          </div>
+        </div>
+      </div>
+      
+      <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
+        <div style="flex: 1; padding: 1rem; background: rgba(0,0,0,0.03); border-radius: var(--radius-sm);">
+          <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">Lifetime Earned</div>
+          <div id="wallet-earned" style="font-size: 1.2rem; font-family: var(--font-mono); font-weight: 800;">₹0.00</div>
+        </div>
+        <div style="flex: 1; padding: 1rem; background: rgba(0,0,0,0.03); border-radius: var(--radius-sm);">
+          <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">Total Withdrawn</div>
+          <div id="wallet-withdrawn" style="font-size: 1.2rem; font-family: var(--font-mono); font-weight: 800; color: var(--red);">₹0.00</div>
+        </div>
+      </div>
+
+      <div class="form-group full-width" style="margin-bottom: 1.5rem;">
+        <label for="wallet-withdraw-amount" style="font-weight: 700; color: var(--text-primary);">Withdraw Amount (₹)</label>
+        <div style="display: flex; gap: 1rem;">
+          <input type="number" id="wallet-withdraw-amount" class="input-field" placeholder="Enter amount to withdraw" min="1" style="flex: 1;">
+          <button id="btn-withdraw-submit" class="btn btn-primary" style="padding: 0 1.5rem;">Withdraw</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════ EDIT TRANSACTION MODAL ════════════════════════════════ -->
+  <div id="modal-edit-transaction" class="modal-overlay hidden">
+    <div class="modal-card glass" style="width: 500px; max-width: calc(100vw - 2rem); padding: 1.5rem;">
+      <div class="form-screen-header" style="margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem;">
+        <h2>✏️ Edit Bill</h2>
+        <button id="btn-close-edit-tx" class="btn btn-ghost" style="padding: 0.5rem; width: 40px; height: 40px; border-radius: 50%;">✕</button>
+      </div>
+      
+      <input type="hidden" id="edit-tx-id">
+      
+      <div class="form-group full-width" style="margin-bottom: 1rem;">
+        <label for="edit-tx-name">Customer Name</label>
+        <input type="text" id="edit-tx-name" class="input-field" placeholder="Customer Name">
+      </div>
+      
+      <div class="form-group full-width" style="margin-bottom: 1rem;">
+        <label for="edit-tx-mobile">Mobile Number</label>
+        <input type="text" id="edit-tx-mobile" class="input-field" placeholder="Mobile Number">
+      </div>
+      
+      <div class="form-group full-width" style="margin-bottom: 1rem;">
+        <label for="edit-tx-amount">Amount (₹)</label>
+        <input type="number" id="edit-tx-amount" class="input-field" placeholder="Amount">
+      </div>
+      
+      <div class="form-group full-width" style="margin-bottom: 1.5rem;">
+        <label for="edit-tx-notes">Notes / Details</label>
+        <textarea id="edit-tx-notes" class="input-field" placeholder="Notes (Service info, etc.)" style="height: 80px;"></textarea>
+      </div>
+      
+      <div style="display: flex; gap: 1rem;">
+        <button id="btn-save-edit-tx" class="btn btn-primary btn-full">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+
+
+  <!-- ═══════════════════ PROFILE MODAL ════════════════════════════════════════ -->
+  <div id="modal-profile" class="modal-overlay hidden">
+    <div class="modal-card glass" style="width: 450px; max-width: calc(100vw - 2rem); padding: 2rem; text-align: center;">
+      <div class="form-screen-header" style="margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem;">
+        <h2>👤 My Profile</h2>
+        <button id="btn-close-profile" class="btn btn-ghost" style="padding: 0.5rem; width: 40px; height: 40px; border-radius: 50%;">✕</button>
+      </div>
+
+      <div style="position: relative; width: 120px; height: 120px; margin: 0 auto 1.5rem;">
+        <div id="profile-photo-preview" class="staff-avatar" style="width: 120px; height: 120px; font-size: 3rem; margin-bottom: 0;">M</div>
+        <button id="btn-upload-trigger" class="btn btn-primary" style="position: absolute; bottom: 0; right: 0; width: 40px; height: 40px; border-radius: 50%; padding: 0;">📷</button>
+        <input type="file" id="input-profile-photo" accept="image/*" style="display: none;">
+      </div>
+
+      <div class="form-group full-width" style="margin-bottom: 1rem; text-align: left;">
+        <label for="profile-name">Display Name</label>
+        <input type="text" id="profile-name" class="input-field" placeholder="Full Name">
+      </div>
+
+      <div class="form-group full-width" style="margin-bottom: 1rem; text-align: left;">
+        <label for="profile-mobile">Mobile Number (WhatsApp)</label>
+        <input type="text" id="profile-mobile" class="input-field" placeholder="+91 XXXX-XXXXXX">
+      </div>
+
+      <div class="form-group full-width" style="margin-bottom: 2rem; text-align: left;">
+        <label for="profile-password">Update Password</label>
+        <input type="password" id="profile-password" class="input-field" placeholder="••••">
+      </div>
+
+      <button id="btn-save-profile" class="btn btn-primary btn-full btn-large">Save Profile Details</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ REPORTS SCREEN ════════════════════════════════════════ -->
+
+  <div id="screen-reports" class="screen">
+    <div class="form-screen-container">
+      <div class="form-screen-header">
+        <button id="btn-back-from-reports" class="btn btn-ghost">← Back</button>
+        <div style="display:flex; flex-direction:column; align-items:center;">
+          <h2>📊 Daily Reports</h2>
+          <div class="report-filter-tabs" style="display:flex; gap:0.5rem; margin-top:0.5rem; background:rgba(0,0,0,0.04); padding:3px; border-radius:8px;">
+            <button id="rpt-filter-today" class="btn btn-sm active" style="padding:0.3rem 0.8rem; border-radius:6px;">Today</button>
+            <button id="rpt-filter-all" class="btn btn-sm" style="padding:0.3rem 0.8rem; border-radius:6px;">All Time</button>
+          </div>
+        </div>
+        <button id="btn-export-csv" class="btn btn-ghost btn-sm">⬇ Export CSV</button>
+      </div>
+      <!-- Report cards -->
+      <div class="report-stats-row">
+        <div class="stat-card glass">
+          <div class="stat-icon">👥</div>
+          <div class="stat-info">
+            <div class="stat-value" id="rpt-customers">0</div>
+            <div class="stat-label">Total Customers</div>
+          </div>
+        </div>
+        <div class="stat-card glass">
+          <div class="stat-icon">💰</div>
+          <div class="stat-info">
+            <div class="stat-value" id="rpt-income">₹0</div>
+            <div class="stat-label">Total Income</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Staff Summary -->
+      <div class="glass report-section">
+        <h3>Staff-wise Summary</h3>
+        <div id="staff-summary-list" class="staff-summary-list"></div>
+      </div>
+
+      <!-- Full Transactions Table -->
+      <div class="glass report-section">
+        <h3>All Transactions Today</h3>
+        <div class="table-wrapper">
+          <table id="report-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Customer</th>
+                <th>Mobile</th>
+                <th>Staff</th>
+                <th>Service</th>
+                <th>Time / Qty</th>
+                <th>Amount</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="report-table-body">
+              <tr><td colspan="8" class="empty-state">No records today</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ SETTINGS SCREEN ══════════════════════════════════════ -->
+  <div id="screen-settings" class="screen">
+    <div class="form-screen-container">
+      <div class="form-screen-header">
+        <button id="btn-back-from-settings" class="btn btn-ghost">← Back</button>
+        <h2>⚙️ Settings</h2>
+        <div></div>
+      </div>
+      <div class="form-card glass">
+        <div class="settings-section">
+          <h3>☁️ Universal Cloud Sync</h3>
+          <div class="guide-box glass" style="padding: 1rem; font-size: 0.85rem; background: rgba(0,200,255,0.03); border: 1px dashed var(--cyan); margin-bottom:1rem;">
+            <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem; color:var(--cyan); font-weight:700;">
+              📱 Works on Mobile, Tablet, PC — Any Device!
+            </div>
+            <ol style="padding-left: 1.25rem; display: flex; flex-direction: column; gap: 0.5rem; color: var(--text-secondary);">
+              <li>Deploy the <code>google-apps-script.js</code> to Google Apps Script (<b>Extensions → Apps Script</b> in your Sheet).</li>
+              <li>Set <b>Execute as: Me</b>, <b>Who has access: Anyone</b>, then copy the <b>Web App URL</b>.</li>
+              <li>Paste the URL below and click <b>Save URL</b>. This syncs <em>everything</em> — staff, services, and all bills.</li>
+              <li><b>Optional (Recommended):</b> Also paste the URL in <code>app.js</code> → <code>GLOBAL_CONFIG.webhookUrl</code> so it works on <em>every device without any setup</em>.</li>
+            </ol>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.5rem; padding:0.6rem 0.8rem; background:rgba(0,230,118,0.06); border:1px solid rgba(0,230,118,0.2); border-radius:8px; margin-bottom:0.75rem;" id="cloud-status-badge">
+            <span id="cloud-status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--red);display:inline-block;"></span>
+            <span id="cloud-status-text" style="font-size:0.82rem; font-weight:600; color:var(--text-secondary);">Not Connected</span>
+          </div>
+          <p class="settings-desc">Supabase Configuration (Recommended):</p>
+          <div class="form-group">
+            <label for="setting-supabase-url">Supabase Project URL</label>
+            <input type="url" id="setting-supabase-url" class="input-field" placeholder="https://your-project.supabase.co" />
+          </div>
+          <div class="form-group">
+            <label for="setting-supabase-key">Supabase Anon Key</label>
+            <input type="password" id="setting-supabase-key" class="input-field" placeholder="your-anon-public-key" />
+          </div>
+          <button id="btn-save-supabase" class="btn btn-primary" style="margin-bottom:1.5rem; background:var(--teal); border-color:var(--teal);">💾 Save Supabase Config</button>
+
+          <p class="settings-desc">Legacy Google Apps Script (Optional):</p>
+          <div class="form-group">
+            <label for="setting-webhook">Apps Script Web App URL</label>
+            <div style="display:flex; gap:0.5rem;">
+              <input type="url" id="setting-webhook" class="input-field" placeholder="https://script.google.com/macros/s/..." style="flex:1;" />
+              <button id="btn-test-webhook" class="btn btn-ghost" title="Test Connection">📡 Ping</button>
+            </div>
+          </div>
+          <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button id="btn-save-webhook" class="btn btn-primary">💾 Save URL</button>
+            <button id="btn-sync-now" class="btn btn-ghost" onclick="pushConfigToSupabase().then(()=>showToast('All settings pushed to cloud!','success'))">☁️ Sync Settings</button>
+            <button id="btn-push-all-bills" class="btn btn-ghost" onclick="syncAllTransactionsToSupabase()">📤 Push All Bills</button>
+            <button id="btn-test-cloud" class="btn btn-primary" style="background:linear-gradient(135deg,#ffb300,#ff6b35); border:none;" onclick="testSupabaseConnection()">📡 Test Supabase Read/Write</button>
+          </div>
+          <div style="font-size:0.78rem; color:var(--text-muted); margin-top:0.5rem; padding:0.5rem; background:rgba(0,200,255,0.04); border-radius:6px; border-left:3px solid var(--cyan);">
+            💡 <b>If other devices don't show bills:</b> Click <b>📤 Push All Bills to Cloud</b> — this uploads all your local bills to Google Sheets so every device can see them.
+          </div>
+          <div id="webhook-status" class="webhook-status"></div>
+          <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+            <h4 style="color:var(--red); font-size:0.9rem; margin-bottom:0.5rem;">⚠️ Danger Zone</h4>
+            <p style="font-size:0.75rem; color:var(--text-muted); margin-bottom:1rem;">If the app is behaving strangely or syncing is broken, you can reset all local data. This will NOT delete data from Google Sheets.</p>
+            <button onclick="window.hardResetApp()" class="btn btn-ghost" style="color:var(--red); border-color:rgba(255,82,82,0.2); background:rgba(255,82,82,0.05);">💥 Hard Reset App Data</button>
+          </div>
+        </div>
+
+
+
+        <div class="settings-section">
+          <h3>⚡ Quick Bill / Rush Items</h3>
+          <p class="settings-desc">Manage the items that appear in the high-speed "Rush Mode" screen.</p>
+          <div id="rush-items-list-settings" class="staff-list-settings" style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:1rem;"></div>
+          
+          <div class="svc-mgmt-grid" style="grid-template-columns: repeat(2, 1fr);">
+            <div class="form-group">
+              <label>Service Name</label>
+              <input type="text" id="new-rush-name" class="input-field" placeholder="e.g. A4 Paper" />
+            </div>
+            <div class="form-group">
+              <label>Price (₹)</label>
+              <input type="number" id="new-rush-price" class="input-field" placeholder="0" />
+            </div>
+            <div class="form-group full-width">
+              <label>Icon</label>
+              <div style="display:flex; gap:1rem; align-items:flex-start; margin-top:0.5rem;">
+                <!-- Preview Box -->
+                <div id="new-rush-icon-preview" class="icon-selection-preview">📄</div>
+                
+                <div class="icon-picker-container">
+                  <input type="hidden" id="new-rush-icon" value="📄" />
+                  <div class="icon-picker-grid" style="grid-template-columns: repeat(3, 1fr); width: fit-content;">
+                    <span onclick="selectPickerIcon('new-rush-icon', '📠')" title="Xerox">📠</span>
+                    <span onclick="selectPickerIcon('new-rush-icon', '🖨️')" title="Print">🖨️</span>
+                    <span onclick="selectPickerIcon('new-rush-icon', '📄')" title="Document">📄</span>
+                    <span onclick="selectPickerIcon('new-rush-icon', '🌈')" title="Colour">🌈</span>
+                    <span onclick="selectPickerIcon('new-rush-icon', '📑')" title="Lamination">📑</span>
+                    <span onclick="selectPickerIcon('new-rush-icon', '🪪')" title="License">🪪</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Color Theme</label>
+              <select id="new-rush-color" class="input-field">
+                <option value="rush-tap-bk">Gray (Standard)</option>
+                <option value="rush-tap-col">Purple (Xerox)</option>
+                <option value="rush-tap-bkp">Blue (Print)</option>
+                <option value="rush-tap-colp">Red (Color Print)</option>
+              </select>
+            </div>
+          </div>
+          <button onclick="addRushItemSetting()" class="btn btn-primary" style="margin-top: 1rem;">+ Add to Rush Grid</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>Staff Names</h3>
+          <div id="staff-list-settings" class="staff-list-settings"></div>
+          <div class="form-group" style="margin-top:0.75rem;">
+            <input type="text" id="new-staff-input" class="input-field" placeholder="Add new staff name..." />
+          </div>
+          <button id="btn-add-staff" class="btn btn-primary">+ Add Staff</button>
+        </div>
+
+        <div class="settings-section">
+          <h3>🌟 Motivational Quotes</h3>
+          <p class="settings-desc">Manage the quotes that appear on the dashboard and billing screens.</p>
+          <div id="quotes-list-settings" class="staff-list-settings" style="display:flex; flex-direction:column; gap:0.5rem; margin-bottom:1rem; max-height:200px; overflow-y:auto; padding:0.5rem; border:1px solid var(--border); border-radius:8px;"></div>
+          <div class="form-group">
+            <textarea id="new-quote-input" class="input-field" placeholder="Type a new motivational quote here..." rows="2" style="resize:none;"></textarea>
+          </div>
+          <button onclick="addQuoteSetting()" class="btn btn-primary" style="margin-top:0.5rem;">+ Add Quote</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ SERVICE MANAGEMENT SCREEN ════════════════════════════ -->
+  <div id="screen-services" class="screen">
+    <div class="form-screen-container">
+      <div class="form-screen-header">
+        <button id="btn-back-from-services" class="btn btn-ghost">← Back</button>
+        <h2>📄 Manage Services</h2>
+        <div></div>
+      </div>
+      <div class="form-card glass">
+        <div class="settings-section" style="flex-shrink:0;">
+          <h3>Add New Service</h3>
+          <div class="svc-mgmt-grid">
+            <div class="form-group">
+              <label for="new-svc-name">Service Name</label>
+              <input type="text" id="new-svc-name" class="input-field" placeholder="e.g. Xerox B&W" />
+            </div>
+            <div class="form-group">
+              <label for="new-svc-price">Base Price (₹)</label>
+              <input type="number" id="new-svc-price" class="input-field" placeholder="0" />
+            </div>
+            <div class="form-group full-width">
+              <label for="new-svc-icon">Icon</label>
+              <div style="display:flex; gap:1rem; align-items:flex-start; margin-top:0.5rem;">
+                <!-- Preview Box -->
+                <div id="new-svc-icon-preview" class="icon-selection-preview">📄</div>
+                
+                <div class="icon-picker-container">
+                  <input type="hidden" id="new-svc-icon" value="📄" />
+                  <div class="icon-picker-grid" style="grid-template-columns: repeat(3, 1fr); width: fit-content;">
+                    <span onclick="selectPickerIcon('new-svc-icon', '📠')" title="Xerox">📠</span>
+                    <span onclick="selectPickerIcon('new-svc-icon', '🖨️')" title="Print">🖨️</span>
+                    <span onclick="selectPickerIcon('new-svc-icon', '📄')" title="Document">📄</span>
+                    <span onclick="selectPickerIcon('new-svc-icon', '🌈')" title="Colour">🌈</span>
+                    <span onclick="selectPickerIcon('new-svc-icon', '📑')" title="Lamination">📑</span>
+                    <span onclick="selectPickerIcon('new-svc-icon', '🪪')" title="License">🪪</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="new-svc-category">Category</label>
+              <input type="text" id="new-svc-category" class="input-field" placeholder="e.g. Printing" />
+            </div>
+
+            <div class="form-group full-width">
+              <label for="new-svc-options">Price Options (Label:Price, Label:Price)</label>
+              <input type="text" id="new-svc-options" class="input-field" placeholder="Standard:2, Color:10..." />
+            </div>
+            <div class="form-group full-width" style="display:flex; gap:0.5rem; margin-top:0.25rem;">
+              <button id="btn-add-service" class="btn btn-primary" style="flex:2;">+ Add Service</button>
+              <button id="btn-cancel-svc-edit" class="btn btn-ghost hidden" style="flex:1;">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+          <h3>Current Services</h3>
+          <div class="svc-table-container">
+            <table id="services-table" class="glass-table">
+              <thead>
+                <tr>
+                  <th>Icon</th>
+                  <th>Service Name</th>
+                  <th>Category</th>
+                  <th>Price</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="services-table-body">
+                <!-- Data injected by app.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden"></div>
+
+
+
+  <!-- SERVICE OPTIONS MODAL -->
+  <div id="modal-service-options" class="modal hidden">
+    <div class="modal-card glass" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2 id="svc-options-title">Select Price Option</h2>
+        <button id="btn-close-svc-options" class="btn btn-ghost btn-sm">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 1.5rem;">
+        <p id="svc-options-desc" style="color:var(--text-muted); font-size:0.92rem; margin-bottom:1.5rem; text-align:center;">Choose an option to add to the bill:</p>
+        <div id="svc-options-grid" class="svc-options-grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CUSTOMER DATABASE SCREEN -->
+  <div id="screen-customer-db" class="screen">
+    <div class="form-screen-container form-screen-container--wide">
+      <div class="form-screen-header">
+        <button id="btn-back-from-cust-db" class="btn btn-ghost">← Dashboard</button>
+        <h2>📂 All-Time Customer Database</h2>
+        <div></div>
+      </div>
+
+      <div class="report-section glass" style="margin-bottom: 1.5rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <h3 style="margin:0;">Client CRM</h3>
+            <p style="font-size:0.8rem; color:var(--text-muted);">Unique customers derived from your transaction history.</p>
+          </div>
+          <div class="form-group" style="width: 300px; margin:0;">
+            <input type="text" id="cust-db-search" class="input-field" placeholder="Search by name or mobile..." oninput="renderCustomerDatabase()" />
+          </div>
+        </div>
+      </div>
+
+      <div class="report-section glass">
+        <div class="table-wrapper">
+          <table id="cust-db-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Client Name</th>
+                <th>Mobile Number</th>
+                <th>Last Visit</th>
+                <th>Total Jobs</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="cust-db-table-body">
+              <tr><td colspan="6" class="empty-state">No customers recorded yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
