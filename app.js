@@ -28,8 +28,9 @@ const STATE = {
   currentPaymentMode: 'cash', // track selected payment mode
   transactions: [],        // completed transactions (persisted in localStorage)
   pendingSync: [],         // transactions waiting to be sent to Sheets
-  withdrawals: [],         // staff commission withdrawals {id, staff, amount, date}
-  reportFilter: 'today',   // 'today' or 'all'
+  withdrawals: [],         // staff commission withdrawals {id, staff, amount, date, paid}
+  attendance: [],          // login/logout records {id, staff, loginTime, logoutTime}
+  reportFilter: 'today',   // 'today' | 'week' | 'month' | 'all'
   settings: {
     webhookUrl: '',
     supabaseUrl: '',
@@ -228,13 +229,12 @@ async function fetchCloudData() {
   const db = getSupabaseClient();
   if (db) {
     try {
-      const today = new Date();
-      today.setHours(0,0,0,0);
+      // Fetch ALL transactions (no date filter) so weekly/monthly reports work
       const { data, error } = await db
         .from('transactions')
         .select('*')
-        .gte('date', today.toISOString())
-        .order('date', { ascending: false });
+        .order('date', { ascending: false })
+        .limit(5000); // reasonable cap
         
       if (!error && data) {
         cloudTransactions = data.map(tx => ({
@@ -255,6 +255,18 @@ async function fetchCloudData() {
         }));
       }
     } catch(e) { console.warn('Supabase fetch failed', e); }
+    
+    try {
+      const { data: wData, error: wError } = await db.from('withdrawals').select('*').order('date', { ascending: false });
+      if (!wError && wData) {
+        const cloudWMap = {};
+        wData.forEach(w => { cloudWMap[w.id] = w; });
+        const wMerged = [...wData];
+        STATE.withdrawals.forEach(w => { if (!cloudWMap[w.id]) wMerged.unshift(w); });
+        STATE.withdrawals = wMerged;
+        saveState();
+      }
+    } catch(e) { console.warn('Supabase withdrawals fetch failed', e); }
   }
 
   // If Supabase failed or returned nothing, try Sheets as fallback
@@ -305,6 +317,23 @@ async function syncToSupabase(transaction) {
     return error ? 'failed' : 'synced';
   } catch(e) {
     console.error('Supabase sync error:', e);
+    return 'failed';
+  }
+}
+
+async function syncWithdrawalToSupabase(withdrawal) {
+  const db = getSupabaseClient();
+  if (!db) return 'failed';
+  try {
+    const { error } = await db.from('withdrawals').upsert({
+      id: withdrawal.id,
+      staff: withdrawal.staff,
+      amount: withdrawal.amount,
+      date: withdrawal.date
+    });
+    return error ? 'failed' : 'synced';
+  } catch(e) {
+    console.error('Supabase sync error for withdrawal:', e);
     return 'failed';
   }
 }
@@ -470,6 +499,7 @@ function saveState() {
     localStorage.setItem('a2z_settings', JSON.stringify(STATE.settings));
     localStorage.setItem('a2z_pendingSync', JSON.stringify(STATE.pendingSync));
     localStorage.setItem('a2z_withdrawals', JSON.stringify(STATE.withdrawals));
+    localStorage.setItem('a2z_attendance', JSON.stringify(STATE.attendance));
     localStorage.setItem('a2z_currentStaff', STATE.currentStaff || '');
     localStorage.setItem('a2z_currentRole', STATE.currentRole || '');
   } catch(e) { console.warn('Save failed', e); }
@@ -488,6 +518,9 @@ function loadState() {
 
     const wd = localStorage.getItem('a2z_withdrawals');
     if (wd) STATE.withdrawals = JSON.parse(wd);
+
+    const att = localStorage.getItem('a2z_attendance');
+    if (att) STATE.attendance = JSON.parse(att);
 
     STATE.currentStaff = localStorage.getItem('a2z_currentStaff') || '';
     STATE.currentRole = localStorage.getItem('a2z_currentRole') || '';
@@ -748,6 +781,17 @@ window.handleLogin = function() {
 window.loginAsStaff = function(staff) {
   STATE.currentStaff = staff.name;
   STATE.currentRole = staff.role;
+
+  // --- Attendance: record login time ---
+  if (staff.role !== 'manager') {
+    const sessionId = generateId();
+    window._currentAttendanceId = sessionId;
+    const record = { id: sessionId, staff: staff.name, loginTime: new Date().toISOString(), logoutTime: null };
+    STATE.attendance.push(record);
+    saveState();
+    syncAttendanceToSupabase(record);
+  }
+
   saveState();
   $('header-staff-name').textContent = staff.name;
   renderRecentTable();
@@ -763,21 +807,22 @@ window.loginAsStaff = function(staff) {
     $('btn-manage-services').classList.remove('hidden');
     $('btn-customer-db').classList.remove('hidden');
     $('btn-clear-history').classList.remove('hidden');
+    if($('btn-withdrawal-review')) $('btn-withdrawal-review').classList.remove('hidden');
+    if($('btn-attendance')) $('btn-attendance').classList.remove('hidden');
   } else {
-    // Staff cannot access reports or settings
     $('btn-reports').classList.add('hidden'); 
     $('btn-settings').classList.add('hidden');
     $('btn-manage-services').classList.add('hidden');
     $('btn-customer-db').classList.add('hidden');
     $('btn-clear-history').classList.add('hidden');
+    if($('btn-withdrawal-review')) $('btn-withdrawal-review').classList.add('hidden');
+    if($('btn-attendance')) $('btn-attendance').classList.add('hidden');
   }
 
   // Silently pull latest cloud transactions so this device is up-to-date
   const hasCloud = STATE.settings.supabaseUrl || STATE.settings.webhookUrl;
   if (hasCloud) {
-    // 1. First push any local unsynced bills up to cloud (silent, background)
     autoSyncUnsyncedBills().then(() => {
-      // 2. Then pull all cloud bills down so this device sees everything
       fetchCloudData();
     });
   }
@@ -831,7 +876,20 @@ function updateDashboardStats() {
       const feeItem = tx.items?.find(i => i.name === 'Gov Fees');
       return s + (feeItem ? parseFloat(feeItem.price) : 0);
     }, 0);
-    $('stat-commission').textContent = formatCurrency((income - govFeesTotal) * 0.10);
+    
+    const todaysCommissionVal = (income - govFeesTotal) * 0.10;
+    $('stat-commission').textContent = formatCurrency(todaysCommissionVal);
+
+    // Milestone Celebration Logic (Every 50)
+    if (STATE.currentRole !== 'manager') {
+      const currentMilestone = Math.floor(todaysCommissionVal / 50) * 50;
+      if (typeof window._lastCelebratedCommission === 'undefined') {
+        window._lastCelebratedCommission = currentMilestone; // Initialize silently on boot
+      } else if (currentMilestone > window._lastCelebratedCommission && currentMilestone >= 50) {
+        window._lastCelebratedCommission = currentMilestone;
+        triggerMilestoneCelebration(currentMilestone);
+      }
+    }
   }
 
   // All time commission for Staff
@@ -948,7 +1006,54 @@ function saveServiceJob(data) {
   });
 
   showReceiptModal(transaction);
+  if (STATE.currentRole !== 'manager' && typeof confetti === 'function') {
+    setTimeout(triggerCommissionConfetti, 300);
+  }
 }
+
+window.triggerCommissionConfetti = function() {
+  const count = 200;
+  const defaults = { origin: { y: 0.7 }, zIndex: 99999 };
+
+  function fire(particleRatio, opts) {
+    confetti({ ...defaults, ...opts, particleCount: Math.floor(count * particleRatio) });
+  }
+
+  fire(0.25, { spread: 26, startVelocity: 55 });
+  fire(0.2, { spread: 60 });
+  fire(0.35, { spread: 100, decay: 0.91, scalar: 0.8 });
+  fire(0.1, { spread: 120, startVelocity: 25, decay: 0.92, scalar: 1.2 });
+  fire(0.1, { spread: 120, startVelocity: 45 });
+};
+
+window.triggerMilestoneCelebration = function(amount) {
+  if (typeof confetti !== 'function') return;
+  const duration = 3000;
+  const end = Date.now() + duration;
+
+  showToast(`🏆 Milestone Reached: ₹${amount} Commission!`, 'success');
+
+  (function frame() {
+    confetti({
+      particleCount: 8,
+      angle: 60,
+      spread: 55,
+      origin: { x: 0 },
+      colors: ['#00a0dc', '#00bfa5', '#ff8f00', '#6d4aff']
+    });
+    confetti({
+      particleCount: 8,
+      angle: 120,
+      spread: 55,
+      origin: { x: 1 },
+      colors: ['#00a0dc', '#00bfa5', '#ff8f00', '#6d4aff']
+    });
+
+    if (Date.now() < end) {
+      requestAnimationFrame(frame);
+    }
+  }());
+};
 
 /* ════════════════════════════════════════════════════════════
    RECEIPT MODAL
@@ -1294,7 +1399,11 @@ window.renderRushItemsSettings = function() {
           <div style="font-size:0.8rem; color:var(--text-muted);">₹${item.price} • ${item.colorClass}</div>
         </div>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="removeRushItemSetting('${item.id}')" style="color:var(--red)">✕</button>
+      </div>
+      <div>
+        <button class="btn btn-ghost btn-sm" onclick="editRushItemSetting('${item.id}')" style="color:var(--cyan); margin-right:0.2rem;">✎</button>
+        <button class="btn btn-ghost btn-sm" onclick="removeRushItemSetting('${item.id}')" style="color:var(--red)">✕</button>
+      </div>
     </div>
   `).join('') || '<div class="empty-state">No items added</div>';
 };
@@ -1308,6 +1417,36 @@ window.removeRushItemSetting = function(id) {
   }
 };
 
+let editingRushId = null;
+
+window.editRushItemSetting = function(id) {
+  const item = STATE.settings.rushItems.find(i => i.id === id);
+  if (!item) return;
+
+  editingRushId = id;
+  $('new-rush-name').value = item.name;
+  $('new-rush-price').value = item.price;
+  $('new-rush-icon').value = item.icon;
+  $('new-rush-color').value = item.colorClass || 'rush-tap-bk';
+  if ($('new-rush-icon-preview')) $('new-rush-icon-preview').textContent = item.icon;
+
+  $('btn-add-rush').textContent = '💾 Update Rush Grid';
+  $('btn-cancel-rush').classList.remove('hidden');
+  $('new-rush-name').focus();
+};
+
+window.cancelEditRushMode = function() {
+  editingRushId = null;
+  $('new-rush-name').value = '';
+  $('new-rush-price').value = '';
+  $('new-rush-icon').value = '📄';
+  $('new-rush-color').value = 'rush-tap-bk';
+  if ($('new-rush-icon-preview')) $('new-rush-icon-preview').textContent = '📄';
+
+  $('btn-add-rush').textContent = '+ Add to Rush Grid';
+  $('btn-cancel-rush').classList.add('hidden');
+};
+
 window.addRushItemSetting = function() {
   const name = $('new-rush-name').value.trim();
   const price = parseFloat($('new-rush-price').value) || 0;
@@ -1316,16 +1455,28 @@ window.addRushItemSetting = function() {
 
   if (!name) { showToast('Name is required', 'error'); return; }
 
-  const id = 'rush-' + generateId();
-  STATE.settings.rushItems.push({ id, name, price, icon, colorClass: color });
+  if (editingRushId) {
+    const item = STATE.settings.rushItems.find(i => i.id === editingRushId);
+    if (item) {
+      item.name = name;
+      item.price = price;
+      item.icon = icon;
+      item.colorClass = color;
+      showToast('Quick bill item updated!', 'success');
+    }
+    cancelEditRushMode();
+  } else {
+    const id = 'rush-' + generateId();
+    STATE.settings.rushItems.push({ id, name, price, icon, colorClass: color });
+    showToast('Quick bill item added!', 'success');
+    
+    $('new-rush-name').value = '';
+    $('new-rush-price').value = '';
+    $('new-rush-icon').value = '📄';
+  }
+
   saveState();
-  
-  $('new-rush-name').value = '';
-  $('new-rush-price').value = '';
-  $('new-rush-icon').value = '📄';
-  
   renderRushItemsSettings();
-  showToast('Quick bill item added!', 'success');
   pushConfigToCloud(); // sync to all devices
 };
 
@@ -1422,35 +1573,116 @@ window.addManualServiceItem = function() {
 /* ════════════════════════════════════════════════════════════
    REPORTS SCREEN
 ════════════════════════════════════════════════════════════ */
-function renderReports() {
-  const isAll = STATE.reportFilter === 'all';
-  let data = isAll ? STATE.transactions : getToday();
-  
-  // Filter for staff
+
+/**
+ * Returns a date range filter for use in report queries.
+ * filter: 'today' | 'week' | 'month' | 'all'
+ */
+function getReportDateRange(filter) {
+  const now = new Date();
+  if (filter === 'today') {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return { start };
+  }
+  if (filter === 'week') {
+    const start = new Date(now);
+    start.setDate(now.getDate() - now.getDay()); // Sunday
+    start.setHours(0, 0, 0, 0);
+    return { start };
+  }
+  if (filter === 'month') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { start };
+  }
+  return { start: null }; // 'all'
+}
+
+/**
+ * Fetch data from Supabase filtered by date range for reports.
+ * Falls back to local STATE.transactions if Supabase is unavailable.
+ */
+async function fetchReportData(filter) {
+  const db = getSupabaseClient();
+  const { start } = getReportDateRange(filter);
+
+  if (db) {
+    try {
+      let query = db.from('transactions').select('*').order('date', { ascending: false }).limit(5000);
+      if (start) query = query.gte('date', start.toISOString());
+
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        return data.map(tx => ({
+          id:              tx.id,
+          date:            tx.date,
+          customerName:    tx.customer_name    ?? tx.customerName    ?? 'Walk-in Customer',
+          mobile:          tx.mobile           ?? '',
+          address:         tx.address          ?? '',
+          staff:           tx.staff            ?? '',
+          service:         tx.service          ?? '',
+          jobType:         tx.job_type         ?? tx.jobType         ?? 'service',
+          paymentMode:     tx.payment_mode     ?? tx.paymentMode     ?? 'cash',
+          amount:          tx.amount           ?? 0,
+          displayDuration: tx.display_duration ?? tx.displayDuration ?? '',
+          notes:           tx.notes            ?? '',
+          items:           tx.items            ?? [],
+          syncStatus:      'synced'
+        }));
+      }
+    } catch(e) { console.warn('Supabase report fetch failed', e); }
+  }
+
+  // Fallback: filter local state
+  if (!start) return STATE.transactions;
+  return STATE.transactions.filter(tx => new Date(tx.date) >= start);
+}
+
+async function renderReports() {
+  // Determine which filter button is active
+  const filter = STATE.reportFilter;
+
+  // Update heading
+  const headingMap = {
+    today: "Today's Transactions",
+    week:  "This Week's Transactions",
+    month: "This Month's Transactions",
+    all:   "All-Time Transactions"
+  };
+  const heading = $('rpt-table-heading');
+  if (heading) heading.textContent = headingMap[filter] || "Transactions";
+
+  // Show loading state
+  const tbody = $('report-table-body');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="9" class="empty-state"><span class="loading-dots">Fetching data from database...</span></td></tr>`;
+
+  let data = await fetchReportData(filter);
+
+  // Filter for staff (non-manager only sees their own)
   if (STATE.currentRole !== 'manager') {
     data = data.filter(tx => tx.staff === STATE.currentStaff);
-    // Hide staff summary for regular staff
     $('staff-summary-list').parentElement.style.display = 'none';
   } else {
     $('staff-summary-list').parentElement.style.display = 'block';
   }
 
-  const income = data.reduce((s, tx) => s + parseFloat(tx.amount || 0), 0);
+  const income   = data.reduce((s, tx) => s + parseFloat(tx.amount || 0), 0);
+  const cashInc  = data.filter(tx => tx.paymentMode === 'cash').reduce((s, tx) => s + parseFloat(tx.amount || 0), 0);
+  const upiInc   = data.filter(tx => tx.paymentMode === 'upi').reduce((s, tx) => s + parseFloat(tx.amount || 0), 0);
 
   $('rpt-customers').textContent = data.length;
-  $('rpt-income').textContent = formatCurrency(income);
+  $('rpt-income').textContent    = formatCurrency(income);
+  if ($('rpt-cash')) $('rpt-cash').textContent = formatCurrency(cashInc);
+  if ($('rpt-upi'))  $('rpt-upi').textContent  = formatCurrency(upiInc);
 
-  // Staff summary (Wallet & Today's Income)
+  // Period label for staff summary
+  const periodLabel = { today: 'Today', week: 'Week', month: 'Month', all: 'Total' }[filter] || 'Period';
+
+  // Staff summary
   const staffMap = {};
-  
-  // Initialize map with all staff members (excluding Manager)
   STATE.settings.staffList.forEach(s => {
-    if (s.role !== 'manager') {
-      staffMap[s.name] = { count: 0, amount: 0 };
-    }
+    if (s.role !== 'manager') staffMap[s.name] = { count: 0, amount: 0 };
   });
-
-  // Add selected range transactions
   data.forEach(tx => {
     if (!staffMap[tx.staff] && tx.staff !== 'Manager' && STATE.settings.staffList.find(s => s.name === tx.staff)) {
       staffMap[tx.staff] = { count: 0, amount: 0 };
@@ -1460,39 +1692,36 @@ function renderReports() {
       staffMap[tx.staff].amount += parseFloat(tx.amount || 0);
     }
   });
-
   const maxAmount = Math.max(...Object.values(staffMap).map(v => v.amount), 1);
-  const staffList = $('staff-summary-list');
-  
-  if (staffList) {
-    staffList.innerHTML = Object.entries(staffMap).map(([name, data]) => {
+  const staffListEl = $('staff-summary-list');
+  if (staffListEl) {
+    staffListEl.innerHTML = Object.entries(staffMap).map(([name, d]) => {
       const wallet = getStaffWallet(name);
       return `
-      <div class="staff-summary-item" onclick="showStaffDetails('${name}')" style="cursor: pointer; transition: all var(--transition);" onmouseover="this.style.transform='translateY(-2px)';" onmouseout="this.style.transform='translateY(0)';">
+      <div class="staff-summary-item" onclick="showStaffDetails('${name}')" style="cursor:pointer;transition:all var(--transition)" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
         <div style="flex:1">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem">
-            <span style="font-weight:600">${name} <span style="font-size:0.75rem; color:var(--text-muted);">(Tap for details)</span></span>
-            <span style="color:#0080ff;font-family:var(--font-mono);font-weight:700">${isAll ? 'Total' : 'Today'}: ${formatCurrency(data.amount)}</span>
+            <span style="font-weight:600">${name} <span style="font-size:0.75rem;color:var(--text-muted)">(Tap for details)</span></span>
+            <span style="color:#0080ff;font-family:var(--font-mono);font-weight:700">${periodLabel}: ${formatCurrency(d.amount)}</span>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:0.8rem;color:var(--text-muted);margin-bottom:0.4rem">
-            <span>${data.count} transaction(s)</span>
-            <span style="font-weight: 600; color:var(--teal)">Bal: ${formatCurrency(wallet.balance)}</span>
+            <span>${d.count} transaction(s)</span>
+            <span style="font-weight:600;color:var(--teal)">Bal: ${formatCurrency(wallet.balance)}</span>
           </div>
-          <div style="font-size:0.75rem; color:var(--text-secondary); background:rgba(0,0,0,0.03); padding:0.4rem; border-radius:4px; display:flex; justify-content:space-between;">
+          <div style="font-size:0.75rem;color:var(--text-secondary);background:rgba(0,0,0,0.03);padding:0.4rem;border-radius:4px;display:flex;justify-content:space-between">
             <span>Earned: ${formatCurrency(wallet.earned)}</span>
             <span style="color:var(--red)">Withdrawn: ${formatCurrency(wallet.withdrawn)}</span>
           </div>
-          <div class="staff-summary-bar" style="width:${Math.min((data.amount / maxAmount) * 100, 100)}%; margin-top:0.4rem;"></div>
+          <div class="staff-summary-bar" style="width:${Math.min((d.amount / maxAmount) * 100, 100)}%;margin-top:0.4rem"></div>
         </div>
-      </div>
-    `}).join('') || '<div class="empty-state">No staff found</div>';
+      </div>`;
+    }).join('') || '<div class="empty-state">No staff found</div>';
   }
 
   // Full table
-  const tbody = $('report-table-body');
   if (!tbody) return;
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="${STATE.currentRole === 'manager' ? 9 : 8}" class="empty-state">No records found</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${STATE.currentRole === 'manager' ? 9 : 8}" class="empty-state">No records found for this period</td></tr>`;
     return;
   }
   tbody.innerHTML = data.map((tx, i) => `
@@ -1666,7 +1895,6 @@ function renderServicesTable() {
     
     return `
     <tr>
-      <td style="font-size:1.5rem">${s.icon}</td>
       <td>${s.name}</td>
       <td><span class="badge-category">${s.category || 'General'}</span></td>
       <td class="amount-cell">${priceDisplay}</td>
@@ -1677,7 +1905,7 @@ function renderServicesTable() {
         </div>
       </td>
     </tr>
-  `}).join('') || '<tr><td colspan="5" class="empty-state">No services added</td></tr>';
+  `}).join('') || '<tr><td colspan="4" class="empty-state">No services added</td></tr>';
 }
 
 window.editService = function(id) {
@@ -1687,10 +1915,8 @@ window.editService = function(id) {
   editingSvcId = id;
   $('new-svc-name').value = svc.name;
   $('new-svc-price').value = svc.price;
-  $('new-svc-icon').value = svc.icon;
   $('new-svc-category').value = svc.category || '';
   $('new-svc-options').value = svc.options || '';
-  if ($('new-svc-icon-preview')) $('new-svc-icon-preview').textContent = svc.icon;
 
 
   $('btn-add-service').textContent = '💾 Update Service';
@@ -1702,10 +1928,8 @@ window.cancelEditServiceMode = function() {
   editingSvcId = null;
   $('new-svc-name').value = '';
   $('new-svc-price').value = '';
-  $('new-svc-icon').value = '📄';
   $('new-svc-category').value = '';
   $('new-svc-options').value = '';
-  if ($('new-svc-icon-preview')) $('new-svc-icon-preview').textContent = '📄';
 
   $('btn-add-service').textContent = '+ Add Service';
   $('btn-cancel-svc-edit').classList.add('hidden');
@@ -1738,7 +1962,7 @@ function bindEvents() {
   $('btn-add-service').addEventListener('click', () => {
     const name = $('new-svc-name').value.trim();
     const price = parseFloat($('new-svc-price').value) || 0;
-    const icon = $('new-svc-icon').value.trim() || '📄';
+    const icon = '📄'; // Default icon
     const category = $('new-svc-category').value.trim() || 'General';
     const options = $('new-svc-options').value.trim();
 
@@ -1773,7 +1997,6 @@ function bindEvents() {
       // Clear form
       $('new-svc-name').value = '';
       $('new-svc-price').value = '';
-      $('new-svc-icon').value = '📄';
       $('new-svc-category').value = '';
     }
 
@@ -1784,11 +2007,21 @@ function bindEvents() {
 
   // ── LOGIN — tap buttons rendered by renderStaffLoginButtons() ───
   $('btn-logout').addEventListener('click', () => {
+    // --- Attendance: record logout time ---
+    if (STATE.currentRole !== 'manager' && window._currentAttendanceId) {
+      const rec = STATE.attendance.find(a => a.id === window._currentAttendanceId);
+      if (rec && !rec.logoutTime) {
+        rec.logoutTime = new Date().toISOString();
+        saveState();
+        syncAttendanceToSupabase(rec);
+      }
+      window._currentAttendanceId = null;
+    }
     STATE.currentStaff = '';
     STATE.currentRole = '';
     saveState();
-    showStaffSelection();        // reset to name selection
-    renderStaffLoginButtons();   // refresh buttons
+    showStaffSelection();
+    renderStaffLoginButtons();
     showScreen('login');
   });
 
@@ -1825,8 +2058,14 @@ function bindEvents() {
   });
 
   $('btn-reports').addEventListener('click', () => {
-    renderReports();
+    // Reset filter to Today each time reports is opened
+    STATE.reportFilter = 'today';
+    const rptBtns = ['rpt-filter-today', 'rpt-filter-week', 'rpt-filter-month', 'rpt-filter-all'];
+    rptBtns.forEach(id => { const b = $(id); if (b) b.classList.remove('active'); });
+    const todayBtn = $('rpt-filter-today');
+    if (todayBtn) todayBtn.classList.add('active');
     showScreen('reports');
+    renderReports(); // async — fires immediately
   });
 
   $('btn-settings').addEventListener('click', () => {
@@ -1908,17 +2147,17 @@ function bindEvents() {
   });
 
   // ── REPORTS ─────────────────────────────────────────────
-  $('rpt-filter-today').addEventListener('click', () => {
-    STATE.reportFilter = 'today';
-    $('rpt-filter-today').classList.add('active');
-    $('rpt-filter-all').classList.remove('active');
-    renderReports();
-  });
-  $('rpt-filter-all').addEventListener('click', () => {
-    STATE.reportFilter = 'all';
-    $('rpt-filter-all').classList.add('active');
-    $('rpt-filter-today').classList.remove('active');
-    renderReports();
+  const _rptBtns = ['rpt-filter-today', 'rpt-filter-week', 'rpt-filter-month', 'rpt-filter-all'];
+  const _rptVals = { 'rpt-filter-today': 'today', 'rpt-filter-week': 'week', 'rpt-filter-month': 'month', 'rpt-filter-all': 'all' };
+  _rptBtns.forEach(btnId => {
+    const el = $(btnId);
+    if (!el) return;
+    el.addEventListener('click', () => {
+      STATE.reportFilter = _rptVals[btnId];
+      _rptBtns.forEach(id => { const b = $(id); if (b) b.classList.remove('active'); });
+      el.classList.add('active');
+      renderReports();
+    });
   });
 
   $('btn-back-from-reports').addEventListener('click', () => showScreen('dashboard'));
@@ -1929,6 +2168,30 @@ function bindEvents() {
   });
   $('modal-staff-detail')?.addEventListener('click', (e) => {
     if (e.target === $('modal-staff-detail')) $('modal-staff-detail').classList.add('hidden');
+  });
+
+  // ── NEW MANAGER MODALS ─────────────────────────────────
+  $('btn-withdrawal-review')?.addEventListener('click', () => {
+    renderWithdrawalReview('all');
+    $('modal-withdrawal-review').classList.remove('hidden');
+  });
+  $('btn-close-withdrawal-review')?.addEventListener('click', () => {
+    $('modal-withdrawal-review').classList.add('hidden');
+  });
+  $('modal-withdrawal-review')?.addEventListener('click', (e) => {
+    if (e.target === $('modal-withdrawal-review')) $('modal-withdrawal-review').classList.add('hidden');
+  });
+
+  $('btn-attendance')?.addEventListener('click', () => {
+    window._attFilter = 'today';
+    renderAttendanceModal();
+    $('modal-attendance').classList.remove('hidden');
+  });
+  $('btn-close-attendance')?.addEventListener('click', () => {
+    $('modal-attendance').classList.add('hidden');
+  });
+  $('modal-attendance')?.addEventListener('click', (e) => {
+    if (e.target === $('modal-attendance')) $('modal-attendance').classList.add('hidden');
   });
 
   // ── WALLET ──────────────────────────────────────────────
@@ -1958,13 +2221,19 @@ function bindEvents() {
       return;
     }
 
-    STATE.withdrawals.push({
+    const newWithdrawal = {
       id: generateId(),
       staff: staffName,
       amount: amount,
-      date: new Date().toISOString()
-    });
+      date: new Date().toISOString(),
+      paid: false
+    };
+    STATE.withdrawals.push(newWithdrawal);
     saveState();
+    
+    if (getSupabaseClient()) {
+      syncWithdrawalToSupabase(newWithdrawal);
+    }
     
     showToast(`Successfully withdrew ${formatCurrency(amount)}`, 'success');
     window.showWallet(); // Refresh modal data
@@ -2244,6 +2513,31 @@ window.showWallet = function() {
   $('wallet-withdrawn').textContent = formatCurrency(wallet.withdrawn);
   $('wallet-balance').textContent = formatCurrency(wallet.balance);
   $('wallet-withdraw-amount').value = '';
+
+  // Render Past Withdrawals History
+  const historyTbody = $('wallet-history-tbody');
+  if (historyTbody) {
+    let myWithdrawals = STATE.withdrawals.filter(w => w.staff === staffName);
+    myWithdrawals.sort((a,b) => new Date(b.date) - new Date(a.date));
+    
+    if (!myWithdrawals.length) {
+      historyTbody.innerHTML = `<tr><td colspan="3" class="empty-state">No withdrawals yet</td></tr>`;
+    } else {
+      historyTbody.innerHTML = myWithdrawals.map(w => `
+        <tr style="border-bottom: 1px solid rgba(0,0,0,0.05);">
+          <td style="padding: 0.5rem; font-size: 0.8rem;">${formatDateTimeShort(w.date)}</td>
+          <td style="padding: 0.5rem; text-align: right; font-family: var(--font-mono); font-weight: 700; color: var(--teal);">${formatCurrency(w.amount)}</td>
+          <td style="padding: 0.5rem; text-align: right;">
+            <span style="padding:0.2rem 0.5rem; border-radius:4px; font-size:0.75rem; font-weight:700;
+              background:${w.paid ? 'rgba(46,125,50,0.1)' : 'rgba(255,143,0,0.1)'};
+              color:${w.paid ? 'var(--green)' : 'var(--amber)'};">
+              ${w.paid ? '✅ Paid' : '⏳ Pending'}
+            </span>
+          </td>
+        </tr>
+      `).join('');
+    }
+  }
   
   $('modal-wallet').classList.remove('hidden');
 };
@@ -2470,6 +2764,16 @@ function init() {
     processPendingSync();
     autoSyncUnsyncedBills();
   }, 3000);
+
+  // Auto-refresh dashboard stats from Supabase every 60 seconds
+  setInterval(() => {
+    if ($('screen-dashboard').classList.contains('active') && STATE.currentStaff) {
+      fetchCloudData().then(() => {
+        updateDashboardStats();
+        renderRecentTable();
+      });
+    }
+  }, 60000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -2499,11 +2803,18 @@ window.renderCustomerDatabase = function() {
         name: tx.customerName || 'N/A',
         mobile: tx.mobile,
         lastVisit: tx.date,
-        totalJobs: 0
+        totalJobs: 0,
+        txDates: [] // Array to hold all readable dates for searching
       };
     }
     
     customers[tx.mobile].totalJobs++;
+    // Add multiple searchable date formats (ISO and visual)
+    customers[tx.mobile].txDates.push(tx.date.substring(0, 10));
+    try {
+      customers[tx.mobile].txDates.push(formatDateTimeShort(tx.date).toLowerCase());
+    } catch(e) {}
+    
     if (new Date(tx.date) > new Date(customers[tx.mobile].lastVisit)) {
       customers[tx.mobile].lastVisit = tx.date;
       if (tx.customerName) customers[tx.mobile].name = tx.customerName;
@@ -2516,7 +2827,8 @@ window.renderCustomerDatabase = function() {
   if (search) {
     customerList = customerList.filter(c => 
       c.name.toLowerCase().includes(search) || 
-      c.mobile.includes(search)
+      c.mobile.includes(search) ||
+      c.txDates.some(dateStr => dateStr.includes(search))
     );
   }
 
@@ -2562,3 +2874,246 @@ window.directWhatsApp = function(mobile) {
   if (phone.length === 10) phone = '91' + phone;
   window.open(`https://wa.me/${phone}`, '_blank');
 };
+
+
+/* ════════════════════════════════════════════════════════════
+   ATTENDANCE SYNC
+════════════════════════════════════════════════════════════ */
+async function syncAttendanceToSupabase(record) {
+  const db = getSupabaseClient();
+  if (!db) return;
+  try {
+    await db.from('attendance').upsert({
+      id: record.id,
+      staff: record.staff,
+      login_time: record.loginTime,
+      logout_time: record.logoutTime || null
+    });
+  } catch(e) { console.warn('Attendance sync failed', e); }
+}
+
+async function fetchAttendanceFromCloud() {
+  const db = getSupabaseClient();
+  if (!db) return;
+  try {
+    const { data, error } = await db.from('attendance').select('*').order('login_time', { ascending: false }).limit(2000);
+    if (!error && data) {
+      const cloudMap = {};
+      data.forEach(r => { cloudMap[r.id] = r; });
+      const merged = data.map(r => ({
+        id: r.id,
+        staff: r.staff,
+        loginTime: r.login_time,
+        logoutTime: r.logout_time || null
+      }));
+      STATE.attendance.forEach(local => { if (!cloudMap[local.id]) merged.push(local); });
+      STATE.attendance = merged;
+      saveState();
+    }
+  } catch(e) { console.warn('Attendance fetch failed', e); }
+}
+
+
+/* ════════════════════════════════════════════════════════════
+   WITHDRAWAL REVIEW PANEL (Manager)
+════════════════════════════════════════════════════════════ */
+window.renderWithdrawalReview = function(staffFilter) {
+  const tbody = $('wr-table-body');
+  const summary = $('wr-summary');
+  if (!tbody || !summary) return;
+
+  // Build per-staff filter buttons
+  const filterBtns = $('wr-staff-filter-btns');
+  if (filterBtns && filterBtns.innerHTML === '') {
+    STATE.settings.staffList.filter(s => s.role !== 'manager').forEach(s => {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm btn-ghost';
+      btn.textContent = s.name;
+      btn.onclick = () => renderWithdrawalReview(s.name);
+      filterBtns.appendChild(btn);
+    });
+  }
+
+  let withdrawals = [...STATE.withdrawals];
+  if (staffFilter !== 'all') withdrawals = withdrawals.filter(w => w.staff === staffFilter);
+  withdrawals.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Summary
+  const totalReq = withdrawals.length;
+  const totalAmt = withdrawals.reduce((s, w) => s + parseFloat(w.amount || 0), 0);
+  const paidAmt  = withdrawals.filter(w => w.paid).reduce((s, w) => s + parseFloat(w.amount || 0), 0);
+  const unpaidAmt = totalAmt - paidAmt;
+
+  summary.innerHTML = `
+    <div class="glass" style="padding:1rem;text-align:center;border-radius:14px;">
+      <div style="font-size:0.75rem;color:var(--text-muted);font-weight:600;">TOTAL REQUESTS</div>
+      <div style="font-size:1.5rem;font-weight:800;color:var(--cyan);">${totalReq}</div>
+    </div>
+    <div class="glass" style="padding:1rem;text-align:center;border-radius:14px;">
+      <div style="font-size:0.75rem;color:var(--text-muted);font-weight:600;">PAID OUT</div>
+      <div style="font-size:1.5rem;font-weight:800;color:var(--green);">${formatCurrency(paidAmt)}</div>
+    </div>
+    <div class="glass" style="padding:1rem;text-align:center;border-radius:14px;">
+      <div style="font-size:0.75rem;color:var(--text-muted);font-weight:600;">PENDING</div>
+      <div style="font-size:1.5rem;font-weight:800;color:var(--amber);">${formatCurrency(unpaidAmt)}</div>
+    </div>
+  `;
+
+  if (!withdrawals.length) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No withdrawal records found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = withdrawals.map((w, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td style="font-weight:700;">${w.staff}</td>
+      <td style="font-family:var(--font-mono);color:var(--teal);font-weight:700;">${formatCurrency(w.amount)}</td>
+      <td>${formatDateTimeShort(w.date)}</td>
+      <td>
+        <span style="padding:0.2rem 0.75rem;border-radius:999px;font-size:0.8rem;font-weight:700;
+          background:${w.paid ? 'rgba(46,125,50,0.1)' : 'rgba(255,143,0,0.1)'};
+          color:${w.paid ? 'var(--green)' : 'var(--amber)'};
+          border:1px solid ${w.paid ? 'var(--green)' : 'var(--amber)'};">
+          ${w.paid ? '✅ Paid' : '⏳ Pending'}
+        </span>
+      </td>
+      <td>
+        <button class="btn btn-sm ${w.paid ? 'btn-ghost' : 'btn-success'}" onclick="toggleWithdrawalPaid('${w.id}')">
+          ${w.paid ? '↩ Unmark' : '✅ Mark Paid'}
+        </button>
+      </td>
+    </tr>
+  `).join('');
+};
+
+window.toggleWithdrawalPaid = function(id) {
+  const w = STATE.withdrawals.find(x => x.id === id);
+  if (!w) return;
+  w.paid = !w.paid;
+  saveState();
+
+  // Sync to Supabase
+  const db = getSupabaseClient();
+  if (db) {
+    db.from('withdrawals').upsert({ id: w.id, staff: w.staff, amount: w.amount, date: w.date, paid: w.paid })
+      .then(() => {});
+  }
+
+  renderWithdrawalReview('all');
+  showToast(w.paid ? `✅ Marked as paid for ${w.staff}` : `↩ Marked as pending for ${w.staff}`, 'success');
+};
+
+
+/* ════════════════════════════════════════════════════════════
+   ATTENDANCE & PERFORMANCE ANALYTICS
+════════════════════════════════════════════════════════════ */
+window._attFilter = 'today';
+
+window.setAttendanceFilter = function(filter) {
+  window._attFilter = filter;
+  ['today','week','month','all'].forEach(f => {
+    const btn = $(`att-filter-${f}`);
+    if (btn) btn.className = `btn btn-sm ${f === filter ? 'btn-primary' : 'btn-ghost'}`;
+  });
+  renderAttendanceModal();
+};
+
+window.renderAttendanceModal = async function() {
+  const container = $('att-cards');
+  if (!container) return;
+  container.innerHTML = `<div class="empty-state">Loading attendance from cloud...</div>`;
+
+  await fetchAttendanceFromCloud();
+
+  const filter  = window._attFilter || 'today';
+  const now     = new Date();
+
+  function startOf(f) {
+    if (f === 'today') { const d = new Date(now); d.setHours(0,0,0,0); return d; }
+    if (f === 'week')  { const d = new Date(now); d.setDate(now.getDate() - now.getDay()); d.setHours(0,0,0,0); return d; }
+    if (f === 'month') { return new Date(now.getFullYear(), now.getMonth(), 1); }
+    return null;
+  }
+
+  const start = startOf(filter);
+  const records = STATE.attendance.filter(r => !start || new Date(r.loginTime) >= start);
+
+  const staffList = STATE.settings.staffList.filter(s => s.role !== 'manager');
+
+  if (!staffList.length) {
+    container.innerHTML = `<div class="empty-state">No staff configured.</div>`;
+    return;
+  }
+
+  container.innerHTML = staffList.map(staff => {
+    const sessions = records.filter(r => r.staff === staff.name);
+
+    // Calculate totals
+    let totalMins = 0;
+    sessions.forEach(s => {
+      if (s.logoutTime) {
+        totalMins += (new Date(s.logoutTime) - new Date(s.loginTime)) / 60000;
+      }
+    });
+    const hours = Math.floor(totalMins / 60);
+    const mins  = Math.floor(totalMins % 60);
+
+    // Performance from transactions
+    const txFilter = start ? STATE.transactions.filter(tx => tx.staff === staff.name && new Date(tx.date) >= start)
+                           : STATE.transactions.filter(tx => tx.staff === staff.name);
+    const totalRevenue = txFilter.reduce((s, tx) => s + parseFloat(tx.amount || 0), 0);
+    const govFees = txFilter.reduce((s, tx) => {
+      const f = tx.items?.find(i => i.name === 'Gov Fees');
+      return s + (f ? parseFloat(f.price) : 0);
+    }, 0);
+    const commission = (totalRevenue - govFees) * 0.10;
+    const wallet = getStaffWallet(staff.name);
+
+    const sessionRows = sessions.slice(0, 5).map(s => `
+      <tr>
+        <td style="font-size:0.8rem;">${new Date(s.loginTime).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}</td>
+        <td style="color:var(--green);font-weight:600;font-size:0.8rem;">${new Date(s.loginTime).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true})}</td>
+        <td style="color:${s.logoutTime ? 'var(--red)' : 'var(--amber)'};font-weight:600;font-size:0.8rem;">
+          ${s.logoutTime ? new Date(s.logoutTime).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}) : '🟡 Active'}
+        </td>
+        <td style="font-size:0.8rem;color:var(--cyan);">
+          ${s.logoutTime ? Math.floor((new Date(s.logoutTime)-new Date(s.loginTime))/60000) + ' min' : '—'}
+        </td>
+      </tr>
+    `).join('');
+
+    const photo = staff.photo
+      ? `<img src="${staff.photo}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:2px solid var(--cyan);">`
+      : `<div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,var(--cyan),var(--teal));display:flex;align-items:center;justify-content:center;font-size:1.4rem;font-weight:900;color:#fff;">${staff.name[0]}</div>`;
+
+    return `
+    <div class="glass" style="padding:1.5rem;border-radius:var(--radius-lg);">
+      <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+        ${photo}
+        <div style="flex:1;">
+          <div style="font-size:1.1rem;font-weight:800;color:var(--text-primary);">${staff.name}</div>
+          <div style="font-size:0.8rem;color:var(--text-muted);">${sessions.length} session(s) · ${hours}h ${mins}m total work time</div>
+        </div>
+        <!-- Performance chips -->
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <span style="padding:0.3rem 0.8rem;border-radius:999px;background:rgba(0,160,220,0.08);border:1px solid var(--cyan);color:var(--cyan);font-size:0.78rem;font-weight:700;">Bills: ${txFilter.length}</span>
+          <span style="padding:0.3rem 0.8rem;border-radius:999px;background:rgba(0,191,165,0.08);border:1px solid var(--teal);color:var(--teal);font-size:0.78rem;font-weight:700;">Revenue: ${formatCurrency(totalRevenue)}</span>
+          <span style="padding:0.3rem 0.8rem;border-radius:999px;background:rgba(109,74,255,0.08);border:1px solid var(--purple);color:var(--purple);font-size:0.78rem;font-weight:700;">Commission: ${formatCurrency(commission)}</span>
+          <span style="padding:0.3rem 0.8rem;border-radius:999px;background:rgba(255,143,0,0.08);border:1px solid var(--amber);color:var(--amber);font-size:0.78rem;font-weight:700;">Balance: ${formatCurrency(wallet.balance)}</span>
+        </div>
+      </div>
+
+      ${sessions.length ? `
+      <div class="table-wrapper" style="max-height:200px;overflow-y:auto;">
+        <table style="font-size:0.82rem;">
+          <thead><tr><th>Date</th><th>Login</th><th>Logout</th><th>Duration</th></tr></thead>
+          <tbody>${sessionRows}${sessions.length > 5 ? `<tr><td colspan="4" class="empty-state" style="font-size:0.75rem;">...and ${sessions.length - 5} more sessions</td></tr>` : ''}</tbody>
+        </table>
+      </div>
+      ` : `<div class="empty-state" style="font-size:0.85rem;">No sessions in this period.</div>`}
+    </div>
+    `;
+  }).join('');
+};
+
